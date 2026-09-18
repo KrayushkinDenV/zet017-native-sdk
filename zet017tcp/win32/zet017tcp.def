@@ -1,0 +1,22 @@
+LIBRARY "zet017tcp"
+EXPORTS
+  zet017_server_create
+  zet017_server_create_ex
+  zet017_server_set_log_level
+  zet017_server_set_log_category_level
+  zet017_server_set_log_file
+  zet017_server_free
+  zet017_server_add_device
+  zet017_server_remove_device
+  zet017_device_get_info
+  zet017_device_get_state
+  zet017_device_get_config
+  zet017_device_get_tenso_config
+  zet017_device_set_config
+  zet017_device_set_tenso_config
+  zet017_device_start
+  zet017_device_stop
+  zet017_channel_get_data
+  zet017_channel_get_all_data
+  zet017_channel_get_all_frame_data
+  zet017_channel_put_data

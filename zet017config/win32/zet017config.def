@@ -1,0 +1,4 @@
+LIBRARY "zet017config"
+EXPORTS
+  zet017_config_load_file
+  zet017_config_save_file

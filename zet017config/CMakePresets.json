@@ -1,0 +1,61 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "vs-vcpkg-x64",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/vs-vcpkg-x64",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "ZET017_EXPECT_ARCH": "x64"
+      }
+    },
+    {
+      "name": "vs-vcpkg-x86",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/vs-vcpkg-x86",
+      "architecture": {
+        "value": "x86",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x86-windows",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "ZET017_EXPECT_ARCH": "x86"
+      }
+    },
+    {
+      "name": "vs-vcpkg-x86-static",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/vs-vcpkg-x86-static",
+      "architecture": {
+        "value": "x86",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x86-windows-static",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "ZET017_EXPECT_ARCH": "x86"
+      }
+    },
+    {
+      "name": "vs-vcpkg-x64-static",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/vs-vcpkg-x64-static",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "VCPKG_MANIFEST_MODE": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "ZET017_EXPECT_ARCH": "x64"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "zet017config",
+  "version": "1.0.0",
+  "dependencies": [
+    {
+      "name": "libxml2",
+      "default-features": false
+    }
+  ]
+}
