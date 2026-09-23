@@ -55,8 +55,8 @@ typedef pthread_cond_t  cond_t;
  * миллисекунд; error и warning — немедленно.
  *
  * Причина: zet017_channel_get_data вызывается из цикла сбора LabView, и
- * fflush на каждой строке в режиме CLFN "Run in UI Thread" вешает
- * фронт-панель, а в любом режиме сериализует все устройства на одном
+ * fflush на каждой строке в режиме CLFN "Run in UI Thread" блокирует
+ * лицевую панель, а в любом режиме сериализует все устройства на одном
  * мьютексе логгера. */
 #define ZET017_LOG_FLUSH_INTERVAL_MS 250
 
@@ -292,7 +292,7 @@ struct zet017_device {
 
     struct zet017_correction_info correction;
 
-    /* Сервер-владелец: рабочий поток берёт отсюда логгер.
+    /* Сервер-владелец: рабочий поток получает отсюда логгер.
      * Заполняется в zet017_server_add_device. */
     struct zet017_server* owner;
 
@@ -457,7 +457,7 @@ static void network_cleanup(void) {
 static uint32_t zet017_get_timestamp(void) {
 #if defined(ZET017_TCP_WINDOWS)
     /* GetTickCount64 не переполняется каждые 49 дней в отличие от GetTickCount.
-     * Берём младшие 32 бита — для вычисления разницы timestamp'ов
+     * Используются младшие 32 бита — для вычисления разницы timestamp'ов
      * (timestamp - device->timestamp > 60000) это безопасно: разница
      * двух uint32_t корректно обрабатывает переполнение при вычитании. */
     return (uint32_t)(GetTickCount64() & 0xFFFFFFFF);
@@ -613,8 +613,8 @@ static int zet017_logger_open_locked(struct zet017_logger* logger, const char* p
     if (!file)
         return -1;
 
-    /* Буферизация: строки info не должны упираться в диск на каждой
-     * итерации цикла опроса LabView (см. ZET017_LOG_FLUSH_INTERVAL_MS). */
+    /* Буферизация: строки info не должны вызывать обращение к диску на
+     * каждой итерации цикла опроса LabView (см. ZET017_LOG_FLUSH_INTERVAL_MS). */
     setvbuf(file, NULL, _IOFBF, ZET017_LOG_BUF_SIZE);
 
     /* Старый файл закрываем только после успешного открытия нового */
@@ -644,7 +644,7 @@ static int zet017_logger_init(struct zet017_logger* logger, const char* path, in
     logger->last_flush = zet017_get_timestamp();
 
     zet017_mutex_lock(&logger->mutex);
-    /* Неудача открытия не фатальна: лог молча отключается, сервер живёт */
+    /* Неудача открытия не фатальна: лог молча отключается, сервер работает */
     (void)zet017_logger_open_locked(logger, path);
     zet017_mutex_unlock(&logger->mutex);
     return 0;
@@ -705,7 +705,7 @@ static void zet017_log_write(struct zet017_server* server, int category, int lev
 
 /* Лог до того, как сервер существует (внутри zet017_server_create_ex).
  * Открывает и закрывает файл на каждое сообщение — вызывается считанные
- * разы за жизнь процесса. */
+ * разы за время работы процесса. */
 static void zet017_log_early(const char* path, int enabled_level, int level, const char* msg) {
     char  stamp[32];
     FILE* f;
@@ -721,13 +721,13 @@ static void zet017_log_early(const char* path, int enabled_level, int level, con
 }
 
 /* Проверка уровня выполняется ДО форматирования и ДО захвата мьютекса:
- * для отфильтрованного сообщения цена — одно сравнение. Гонка чтения
+ * затраты на отфильтрованное сообщение — одно сравнение. Гонка чтения
  * уровня с set_log_level безвредна.
  *
  * ВАЖНО: SLOG нельзя вызывать, удерживая любой мьютекс устройства или
- * сервера. Логгер берёт собственный мьютекс, и порядок захвата получился бы
- * обратным тому, в котором их берут рабочие потоки, — прямой путь к
- * взаимной блокировке. Факты собираются в локальные переменные под
+ * сервера. Логгер захватывает собственный мьютекс, и порядок захвата
+ * оказался бы обратным тому, которого придерживаются рабочие потоки, что
+ * приводит к взаимной блокировке. Факты собираются в локальные переменные под
  * мьютексом, а запись в лог идёт после его освобождения. */
 #define SLOG(s, cat, lvl, ...)                             \
     do {                                                   \
@@ -1689,8 +1689,8 @@ static void zet017_process_adc_dac(struct zet017_device* device, union zet017_pa
 static void zet017_update_state(struct zet017_device* device, union zet017_packet* packet) {
     uint32_t timestamp = zet017_get_timestamp();
 
-    /* Раз в 10 секунд — темп приёма. Даёт точку отсчёта для разбора
-     * жалоб на «рваные данные» вместе с сообщениями adc buffer overrun. */
+    /* Раз в 10 секунд — темп приёма. Служит точкой отсчёта при разборе
+     * сообщений о пропусках в данных вместе с adc buffer overrun. */
     if (timestamp - device->log_rate_ts >= 10000) {
         device->log_rate_ts = timestamp;
         DLOG(device, zet017_cat_data, zet017_log_info,
@@ -1845,7 +1845,7 @@ ZET017_TCP_API zet017_server_create_ex(zet017_handle* handle, const char* log_pa
     if (lvl > zet017_log_info) lvl = zet017_log_info;
 
     /* Сервера ещё нет: отказы до его создания пишет early-логгер,
-     * штатное "entry" уходит уже через готовый логгер — чтобы баннер
+     * штатное "entry" записывается уже через готовый логгер — чтобы баннер
      * сессии оставался первой строкой файла. */
     if (!handle) {
         zet017_log_early(log_path, lvl, zet017_log_warning,
@@ -2050,7 +2050,7 @@ ZET017_TCP_API zet017_server_add_device(zet017_handle handle, const char* ip) {
     for (;;) {
         memset(device, 0, sizeof(struct zet017_device));
         /* Владелец должен быть проставлен ДО запуска рабочего потока:
-         * поток берёт отсюда логгер с первой же итерации. */
+         * поток получает отсюда логгер с первой же итерации. */
         device->owner = server;
         strncpy(device->ip,       ip, MAX_IP_LENGTH - 1);
         strncpy(device->info.ip,  ip, MAX_IP_LENGTH - 1);
@@ -2510,7 +2510,7 @@ static void zet017_adc_extract_channel_locked(
     float* out, uint32_t out_stride)
 {
     /* Смещение канала внутри кадра: выключенные каналы в потоке
-     * физически отсутствуют, поэтому считаем только включённые. */
+     * физически отсутствуют, поэтому учитываются только включённые. */
     uint32_t offset = 0;
     for (uint32_t i = 0; i < channel; ++i) {
         if (adc->channel_mask & (1 << i))
@@ -2589,8 +2589,9 @@ ZET017_TCP_API zet017_channel_get_data(
 
         /* Переполнение кольцевого буфера: цикл опроса не успевает за
          * устройством, и часть окна [pointer-size, pointer) писатель уже
-         * перезаписал. Проверяем только после первой обёртки буфера,
-         * иначе арифметика по кольцу даёт ложные срабатывания на старте. */
+         * перезаписал. Проверка выполняется только после первого оборота
+         * буфера, иначе арифметика по кольцу даёт ложные срабатывания
+         * на старте. */
         if (device->adc_data.frames_total >= (uint64_t)channel_size) {
             uint32_t writer = device->adc_data.pointer / step;
             uint32_t behind = (writer >= pointer)
@@ -2640,14 +2641,14 @@ ZET017_TCP_API zet017_channel_get_data(
 
 /* Общая реализация чтения всех активных каналов за один захват мьютекса.
  *
- * Ради этого всё и затевалось: при поканальном чтении мьютекс отпускается
- * между вызовами, и поток приёма успевает затереть начало окна — тогда
+ * Это и есть назначение функции: при поканальном чтении мьютекс отпускается
+ * между вызовами, и поток приёма успевает перезаписать начало окна — тогда
  * первый канал прочитан до перезаписи, а последний уже после, то есть из
- * следующего оборота кольца. Здесь все каналы снимаются из одного окна.
+ * следующего оборота кольца. Здесь все каналы считываются из одного окна.
  *
  * planar != 0 — отсчёты каждого канала лежат подряд (строки по size);
  * planar == 0 — каналы чередуются внутри кадра, как в самом кольце.
- * Обе раскладки даёт один и тот же проход, меняется только шаг записи. */
+ * Обе раскладки формирует один и тот же проход, меняется только шаг записи. */
 static int zet017_channel_get_all_impl(
     zet017_handle handle, uint32_t number, uint32_t pointer,
     float* data, uint32_t size, uint32_t capacity,
@@ -2710,9 +2711,9 @@ static int zet017_channel_get_all_impl(
         if (capacity < need) { fail = -7; break; }
 
         /* Детектор переполнения кольца считается ОДИН раз на вызов: он
-         * оперирует кадрами и от номера канала не зависит. Проверяем только
-         * после первой обёртки буфера, иначе арифметика по кольцу даёт
-         * ложные срабатывания на старте. */
+         * оперирует кадрами и от номера канала не зависит. Проверка
+         * выполняется только после первого оборота буфера, иначе арифметика
+         * по кольцу даёт ложные срабатывания на старте. */
         if (device->adc_data.frames_total >= (uint64_t)channel_size) {
             uint32_t writer = device->adc_data.pointer / step;
             uint32_t behind = (writer >= pointer)
@@ -2752,7 +2753,8 @@ static int zet017_channel_get_all_impl(
     zet017_mutex_unlock(&device->adc_data.mutex);
 
     /* Тихий указатель: channels можно не запрашивать. Заполняем и при
-     * отказе -7 тоже — иначе клиенту неоткуда узнать, сколько выделять. */
+     * отказе -7 тоже — иначе вызывающая сторона не может определить
+     * требуемый размер буфера. */
     if (channels)
         *channels = work;
 

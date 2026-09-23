@@ -31,7 +31,7 @@ for each of four message categories. Adds `zet017_server_create_ex`,
 `zet017_server_set_log_file`.
 
 **Reading all channels in one call.** `zet017_channel_get_all_data` and
-`zet017_channel_get_all_frame_data` take every active channel under a single
+`zet017_channel_get_all_frame_data` read every active channel under a single
 mutex acquisition, from one window of the ring buffer. With per-channel reads
 the mutex is released between calls and the receiving thread has time to
 overwrite the beginning of the window — the first channel ends up read before
@@ -85,11 +85,11 @@ A session with a device does not fit into a single call. After
 `zet017_server_add_device` returns, the worker thread keeps running: it holds
 the command and stream sockets open, reconnects on a drop, and continuously
 fills the ADC ring buffer. The next call to `zet017_channel_get_all_data` must
-land in that very same state — the same sockets, the same buffer, the same
-counters.
+operate on that very same state: the same sockets, the same buffer and the
+same counters.
 
-The state must therefore outlive the return from the DLL function. Keeping it
-on the caller's side is impossible: it consists of `mutex_t` and `cond_t`, the
+The lifetime of that state must therefore exceed the duration of a single DLL
+call. Keeping it on the caller's side is impossible: it consists of `mutex_t` and `cond_t`, the
 thread handle `thread_t`, the sockets `socket_t`, the log `FILE*` and a
 multi-megabyte ring buffer. All of these are declared conditionally per
 platform — `CRITICAL_SECTION` versus `pthread_mutex_t`, `HANDLE` versus
@@ -119,7 +119,7 @@ file stays open (see the section on the Abort Execution button).
 ### The silent pointer pattern
 
 Every pointer in the public API is assigned to one of two categories, and the
-category is fixed for the lifetime of the function:
+category is fixed in the signature and does not depend on the call conditions:
 
 - **Required** (non-nullable). `NULL` is treated as a refusal: the function
   returns a negative code and produces no side effects. A partial write into
@@ -149,7 +149,7 @@ through it unmodified.
 The consequence for the calling side is that no dummy arguments have to be
 constructed for the sake of signature completeness, and refusals do not have to
 be classified by severity. A negative return code means nothing was performed;
-zero means exactly what was requested was performed.
+zero means that exactly the requested amount of work was performed.
 
 ### Grounds for invocation from an arbitrary language
 
@@ -166,7 +166,7 @@ The set of decisions:
 - **Exports via `.def`.** Names are placed in the export table without
   decoration: `zet017_device_get_config`, not `_zet017_device_get_config@12`.
   `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` is deliberately disabled; `win32/*.def` is
-  the single source of truth for what is exported.
+  the only place that defines what is exported.
 - **Opaque Pointer** — see the dedicated subsection below. What crosses the
   boundary is `zet017_handle`, which is an `int32_t`; the value `0` is invalid.
 - **POD structures only** (plain old data). Fixed-width integer types are
@@ -222,7 +222,7 @@ channel.
 All three reading functions take `pointer` and `size` in samples per channel
 and read **backwards** — the window returned is `[pointer - size, pointer)`.
 
-### Per channel and all channels at once
+### Per-channel reads and reading all channels
 
 | function | `data` layout |
 |---|---|
@@ -237,11 +237,11 @@ Reading all channels in a single call is not about convenience. With per-channel
 reads the internal mutex is released between calls, and the receiving thread has
 time to overwrite the beginning of the window: the first channel ends up read
 before the overwrite and the last one after it, i.e. from the next lap of the
-ring. The `..._get_all_*` functions take all channels under a single lock, from
+ring. The `..._get_all_*` functions read all channels under a single lock, from
 one window. For calculations where channels are compared against each other
 (measurement against reference) this is a hard requirement.
 
-Both layouts produce the same numbers and differ only in order. The planar one
+Both layouts contain the same samples and differ only in order. The planar one
 requires no rearranging either in C or in LabVIEW; the interleaved one mirrors
 the ring order and copies roughly 40 % faster inside the DLL, but the caller has
 to unpack it.
@@ -257,10 +257,10 @@ the `channels` parameter.
 ### Buffer size
 
 The buffer is allocated by the caller, at least `channels * size` `float`
-elements. The library cannot determine the size of someone else's buffer, so it
+elements. The size of the supplied buffer is not known to the library, so it
 requires `capacity` — how many elements fit into it. If that is too small, −7 is
 returned, nothing is written into `data`, and the required number of channels is
-placed into `*channels`, so the needed size is learned rather than guessed.
+placed into `*channels`, so the required size can be determined rather than guessed.
 `channels` may be `NULL` if it is not wanted.
 
 ### Return codes of `..._get_all_*`
@@ -278,7 +278,7 @@ placed into `*channels`, so the needed size is learned rather than guessed.
 
 - `zet017_channel_get_all_data` — the `data` parameter is declared as a
   **2D Array of Single** passed as Array Data Pointer; rows are channels,
-  columns are samples, and a given channel is taken with Index Array.
+  columns are samples, and a given channel is extracted with Index Array.
 - `zet017_channel_get_all_frame_data` — **Array of Single** (1D); unpacking is
   done with Reshape Array to (`size` × `n`) followed by Transpose Array, or with
   Decimate 1D Array.
@@ -310,16 +310,16 @@ reaches `struct zet017_config`:
 | `ChannelDAC` | `mask_channel_dac` | no |
 | `name`, `type`, `configTime` | `device_name` and ZETLAB metadata | partly |
 
-Writing therefore updates only its own elements and carries the rest of the file
-over as it is — including Windows-style line endings, indentation, the space in
+Writing therefore updates only the elements the module deals with and carries
+the rest of the file over unchanged — including Windows-style line endings, indentation, the space in
 empty tags (`<AFCH />`) and Cyrillic text in attributes. The one line that always
 changes is the XML declaration: `encoding="UTF-8"` is added to it, without which
 libxml2 replaces Cyrillic characters in attributes with character references
 (`№` becomes `&#x2116;`).
 
 The file is replaced through a temporary file next to it, so a failed write
-leaves the original intact. Saving the same structures again does not change the
-file.
+leaves the original file unchanged. Saving the same structures again does not
+change the file.
 
 What exactly gets written, and how the "rate versus raw code" precedence is
 resolved, is documented in the function comment in `zet017config.h`.
@@ -332,7 +332,7 @@ cmake --preset vs-x86      # or vs-x64
 cmake --build out/build/vs-x86
 ```
 
-The XML module (vcpkg pulls libxml2 in automatically from vcpkg.json):
+The XML module (vcpkg installs libxml2 automatically from vcpkg.json):
 ```
 cmake --preset vs-vcpkg-x86
 cmake --build out/build/vs-vcpkg-x86
@@ -364,7 +364,7 @@ not committed.
 - Always next to the application: `zet017tcp.dll` (standalone, no dependencies).
 - Only if XML parsing is needed: additionally `zet017config.dll` plus the
   accompanying libxml2 DLLs (check with `dumpbin /dependents zet017config.dll`:
-  usually `libxml2.dll` and, with those features enabled, zlib/iconv/lzma).
+  usually `libxml2.dll` and, with optional features enabled, zlib/iconv/lzma).
 - The bitness of the DLL must match LabVIEW (32-bit → x86 builds).
 
 ## Importing into LabVIEW (Import Shared Library)
@@ -445,7 +445,7 @@ zet017_server_set_log_file(h, NULL);            /* switch off and release the fi
 ```
 
 A typical setup for an acquisition loop: info for all categories, and error for
-the `API` category. The `channel_get_data: entry/success` spam then disappears,
+the `API` category. The flood of `channel_get_data: entry/success` messages then stops,
 while network events, command errors and buffer overruns remain.
 
 The setters may be called at any moment from any VI, in parallel with a running
@@ -472,13 +472,13 @@ how many frames were lost. It appears at most once per second per device.
 
 **Call Library Function Node thread mode — "Run in any thread".** By default the
 node sits in "Run in UI Thread": the log write from `channel_get_data` then
-happens in the LabVIEW UI thread, freezes the front panel and serialises calls
+happens in the LabVIEW UI thread, blocks the front panel and serialises calls
 from all VIs. The DLL is thread-safe; there are no restrictions on the mode.
 
 **The log file path must be absolute and ASCII-only.** The current directory in
 LabVIEW is unpredictable: a relative path will land either next to `LabVIEW.exe`
-or next to the built EXE, and an application under `Program Files` cannot write
-next to itself. Sensible places are `%LOCALAPPDATA%` or
+or next to the built EXE, and an application installed under `Program Files` cannot write
+into its own directory. Suitable locations are `%LOCALAPPDATA%` or
 `C:\ProgramData\<application>\`. Cyrillic characters in the path are not
 supported (`fopen` works with the ANSI code page). The maximum length is 259
 characters.
@@ -497,7 +497,7 @@ int r = zet017_server_set_log_file(h, "C:\\ProgramData\\zet\\zet017.log");
 **The Abort Execution button.** It does not call `zet017_server_free`: the file
 stays open, the worker threads keep running, and the next Run creates a second
 server and appends a second banner to the same file. This is expected; such
-overlaps are untangled by time and by `pid=` in the banners. To release the file
+overlaps are resolved by timestamp and by `pid=` in the banners. To release the file
 properly, call `zet017_server_set_log_file(h, NULL)` or `zet017_server_free`.
 
 ## Important when changing the structures
